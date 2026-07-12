@@ -1,0 +1,51 @@
+# Visual Studio build output
+Debug/
+Release/
+x64/
+x86/
+Win32/
+[Aa][Rr][Mm]/
+[Dd][Ee][Bb][Uu][Gg]/
+[Rr][Ee][Ll][Ee][Aa][Ss][Ee]/
+*.exe
+*.pdb
+*.ilk
+*.obj
+*.lib
+*.dll
+*.exp
+*.log
+*.tlog
+*.recipe
+*.lastbuildstate
+*.idb
+*.ipdb
+*.iobj
+
+# Visual Studio user files
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# SQLite database (user data - keep only template if needed)
+data/*.db
+
+# Windows shortcuts and thumbs
+Thumbs.db
+Desktop.ini
+
+# Compiled files
+*.com
+*.class
+*.dll
+*.so
+*.o
+
+# IDE files
+*.swp
+*.swo
+*~
+.idea/
+*.DS_Store

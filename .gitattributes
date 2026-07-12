@@ -1,0 +1,22 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Source code
+*.c text
+*.h text
+*.md text
+*.txt text
+
+# Visual Studio files
+*.sln text eol=crlf
+*.vcxproj text eol=crlf
+*.vcxproj.filters text eol=crlf
+
+# Binary files
+*.db binary
+*.exe binary
+*.pdb binary
+*.ilk binary
+*.obj binary
+*.lib binary
+*.dll binary
