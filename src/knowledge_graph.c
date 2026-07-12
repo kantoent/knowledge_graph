@@ -1,326 +1,379 @@
-#define _CRT_SECURE_NO_WARNINGS  
-#include "graph.h"               
-#include "sqlite3.h"            
-sqlite3* db;                     // ȫ��SQLite���ݿ�����ָ�룬���ж����ݿ�Ķ�д����Ҫͨ�����ָ�������
-#define DB_FILENAME "ds_graph.db" // �������ݿ��ļ���
-void printSQLError(char* desc) {
-    // ��ӡ�������飺���� + SQLite������Ϣ + ������
-    printf("�������ݿ� - %s | ���飺%s | �����룺%d\n",
+#define _CRT_SECURE_NO_WARNINGS
+#include "graph.h"
+#include "sqlite3.h"
+
+#define DB_FILENAME "ds_graph.db"  // 数据库文件名
+
+/* ==================== 菜单枚举 ==================== */
+typedef enum {
+    MENU_EXIT = 0,
+    MENU_ADD_VERTEX = 1,
+    MENU_ADD_EDGE,
+    MENU_QUERY_VERTEX,
+    MENU_MODIFY_VERTEX,
+    MENU_MODIFY_EDGE,
+    MENU_DELETE_VERTEX,
+    MENU_DELETE_EDGE,
+    MENU_TRAVERSE,
+    MENU_SAVE_DB,
+    MENU_LOAD_DB,
+    MENU_STATS,
+    MENU_CLEAR
+} MenuChoice;
+
+typedef enum {
+    QUERY_BY_ID = 1,
+    QUERY_BY_NAME,
+    QUERY_BY_TYPE,
+    QUERY_EDGES,
+    QUERY_EDGES_BY_NAME
+} QueryChoice;
+
+/* ==================== SQLite 辅助函数 ==================== */
+void printSQLError(sqlite3* db, const char* desc) {
+    printf("操作数据库 - %s | 信息：%s | 错误码：%d\n",
         desc, sqlite3_errmsg(db), sqlite3_errcode(db));
 }
-//��ʼ��SQLite���ݿ⣨���������������ڣ�
-int initSQLiteDB() {
-    // ��һ���������ݿ⣨�������򴴽���
-    int rc = sqlite3_open(DB_FILENAME, &db);
-    if (rc != SQLITE_OK) { // ��ʧ��
-        printSQLError("�����ݿ�ʧ��");
-        return -1;
-    }
 
-    // �ڶ����������������graph_node��
-    char* create_node_table = "create table if not exists graph_node (" // ����������������Ѿ����ڣ��Ͳ��ظ�����
-        "id integer primary key,"          // ����ID��Ψһ��
-        "name text not null,"              // �������ƣ��ǿգ�
-        "type text not null);";            // �������ͣ��ǿգ�
-    // ִ��SQL��䣨�޻ص�������
-    rc = sqlite3_exec(db, create_node_table, NULL, NULL, NULL);// ִ��SQL��䣬���������ݿ����ӡ�Ҫִ�е�SQL���ص��������ص�������������Ϣ
-    if (rc != SQLITE_OK) { // ������ʧ��
-        printSQLError("���������ʧ��");
-        return -1;
-    }
-
-    // �����߱�
-    char* create_edge_table = "create table if not exists graph_edge ("
-        "id integer primary key autoincrement," // �ߵ�����ID
-        "start_id integer not null,"// ��㶥��
-        "end_id integer not null,"// �յ㶥��
-        "rel_name text not null,"// �ߵĹ�ϵ����
-        "foreign key (start_id) references graph_node(id) on delete cascade,"// ��֤�ߵ����IDһ���Ƕ�����д��ڵ�ID��ɾ������ʱ�Զ�ɾ������
-        "foreign key (end_id) references graph_node(id) on delete cascade);"; // ��֤�ߵ��յ�IDһ���Ƕ�����д��ڵ�ID��ɾ������ʱ�Զ�ɾ������
-
-    // ִ�н������
-    rc = sqlite3_exec(db, create_edge_table, NULL, NULL, NULL);
+int execSQLWithError(sqlite3* db, const char* sql, const char* desc) {
+    char* err_msg = NULL;
+    int rc = sqlite3_exec(db, sql, NULL, NULL, &err_msg);
     if (rc != SQLITE_OK) {
-        printSQLError("�����߱�ʧ��");
+        printf("操作数据库 - %s | 详情：%s\n", desc, err_msg);
+        sqlite3_free(err_msg);
+    }
+    return rc;
+}
+
+/* ==================== SQLite 初始化 ==================== */
+int initSQLiteDB(sqlite3** p_db) {
+    int rc = sqlite3_open(DB_FILENAME, p_db);
+    if (rc != SQLITE_OK) {
+        printf("操作数据库 - 打开数据库失败 | 信息：%s | 错误码：%d\n",
+            sqlite3_errmsg(*p_db), sqlite3_errcode(*p_db));
         return -1;
     }
 
-    printf("�ɹ������ݿ��ʼ����ɣ�\n");
+    const char* create_node_table =
+        "create table if not exists graph_node ("
+        "id integer primary key,"
+        "name text not null,"
+        "type text not null);";
+
+    rc = execSQLWithError(*p_db, create_node_table, "创建节点表失败");
+    if (rc != SQLITE_OK) return -1;
+
+    const char* create_edge_table =
+        "create table if not exists graph_edge ("
+        "id integer primary key autoincrement,"
+        "start_id integer not null,"
+        "end_id integer not null,"
+        "rel_name text not null,"
+        "foreign key (start_id) references graph_node(id) on delete cascade,"
+        "foreign key (end_id) references graph_node(id) on delete cascade);";
+
+    rc = execSQLWithError(*p_db, create_edge_table, "创建边表失败");
+    if (rc != SQLITE_OK) return -1;
+
+    printf("成功：数据库初始化完成！\n");
     return 0;
 }
 
+/* ==================== 保存图到 SQLite ==================== */
+int saveGraphToSQLite(sqlite3* db, Graph* g) {
+    execSQLWithError(db, "delete from graph_edge;", "清空边表失败");
+    execSQLWithError(db, "delete from graph_node;", "清空节点表失败");
 
-//��ͼ���ݱ��浽SQLite���ݿ�
-int saveGraphToSQLite(Graph* g) {
-    // ��վ�����
-    sqlite3_exec(db, "delete from graph_edge;", NULL, NULL, NULL); // ɾ���߱���������
-    sqlite3_exec(db, "delete from graph_node;", NULL, NULL, NULL); // ɾ���������������
+    /* 插入顶点数据 */
+    sqlite3_stmt* stmt;
+    const char* sql_node = "insert into graph_node (id, name, type) values (?, ?, ?);";
 
-    // ���붥�����ݣ�����������ݣ���Ԥ�������
-    sqlite3_stmt* stmt;// Ԥ����������
-    
-    char* sql_node = "insert into graph_node (id, name, type) values (?, ?, ?);";// SQLģ��
-   
-    // ����SQLģ�壬����Ԥ�������
-    // ���������ݿ����ӡ�SQL��䡢SQL���ȣ�-1��ʾ�Զ����㣩��Ԥ�������ָ�롢δ������SQL��NULL��
     int rc = sqlite3_prepare_v2(db, sql_node, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
-        printSQLError("Ԥ��������������ʧ��");
+        printSQLError(db, "预编译顶点插入失败");
         return -1;
     }
-    // �����ڴ�������ж��㣬����������ݿ�
+
     VertexNode* p = g->vertex_head;
     while (p != NULL) {
-        // �󶨲�������SQLģ�����?��ֵ
-        sqlite3_bind_int(stmt, 1, p->id);// ����1��?���ID���������ͣ�
-        // SQLITE_TRANSIENT����ʾ��������ʱ�ģ�SQLite�踴��һ����ʱ�ã�
-        sqlite3_bind_text(stmt, 2, p->name, strlen(p->name), SQLITE_TRANSIENT);// ��2��?������
-        sqlite3_bind_text(stmt, 3, p->type, strlen(p->type), SQLITE_TRANSIENT);// ��3��?������
-        sqlite3_step(stmt);//ִ��Ԥ�������
-        sqlite3_reset(stmt); //����Ԥ�������
+        sqlite3_bind_int(stmt, 1, p->id);
+        sqlite3_bind_text(stmt, 2, p->name, strlen(p->name), SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 3, p->type, strlen(p->type), SQLITE_TRANSIENT);
+        sqlite3_step(stmt);
+        sqlite3_reset(stmt);
         p = p->next;
     }
-    sqlite3_finalize(stmt);//�ͷ�Ԥ����������Դ
+    sqlite3_finalize(stmt);
 
-    // ���������
-    char* sql_edge = "insert into graph_edge (start_id, end_id, rel_name) values (?, ?, ?);";
+    /* 插入边数据 */
+    const char* sql_edge = "insert into graph_edge (start_id, end_id, rel_name) values (?, ?, ?);";
     rc = sqlite3_prepare_v2(db, sql_edge, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
-        printSQLError("Ԥ�����߲������ʧ��");
+        printSQLError(db, "预编译边插入失败");
         return -1;
     }
-    // �������ж���ıߣ�����������ݿ�
+
     p = g->vertex_head;
     while (p != NULL) {
-        EdgeNode* e = p->first_edge;// ������ǰ��������б�
+        EdgeNode* e = p->first_edge;
         while (e != NULL) {
             sqlite3_bind_int(stmt, 1, p->id);
             sqlite3_bind_int(stmt, 2, e->end_id);
             sqlite3_bind_text(stmt, 3, e->rel_name, strlen(e->rel_name), SQLITE_TRANSIENT);
             sqlite3_step(stmt);
             sqlite3_reset(stmt);
-            e = e->next;// ������һ����
+            e = e->next;
         }
-        p = p->next;// ������һ������
+        p = p->next;
     }
     sqlite3_finalize(stmt);
 
-    printf("�ɹ���ͼ�������ѱ��浽���ݿ⣡\n");
+    printf("成功：图数据已保存到数据库！\n");
     return 0;
 }
 
-//��SQLite���ݿ��������
-int loadGraphFromSQLite(Graph* g) {
-    //����ڴ����ͼ
+/* ==================== 从 SQLite 加载图 ==================== */
+int loadGraphFromSQLite(sqlite3* db, Graph* g) {
     initGraph(g);
-    // ��ѯ��������
-    sqlite3_stmt* stmt; // Ԥ�������
-    char* sql_node = "select id, name, type from graph_node;"; // ��ѯ���
+
+    /* 加载顶点 */
+    sqlite3_stmt* stmt;
+    const char* sql_node = "select id, name, type from graph_node;";
     int rc = sqlite3_prepare_v2(db, sql_node, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
-        printSQLError("Ԥ���������ѯ���ʧ��");
-        return -1;
-    }
-    // ִ�в�ѯ���������
-    while (sqlite3_step(stmt) == SQLITE_ROW) { //SQLITE_ROW����һ�����ݿ��Զ�ȡ
-        // ��ȡ��ǰ�е�������
-        int id = sqlite3_column_int(stmt, 0);
-        char* name = (char*)sqlite3_column_text(stmt, 1);
-        char* type = (char*)sqlite3_column_text(stmt, 2);
-        addVertex(g, id, name, type);// �Ѷ�ȡ���Ķ������ݣ����ӵ��ڴ����ͼ�ṹ��
-    }
-    sqlite3_finalize(stmt);
-
-    // ��ѯ������
-    char* sql_edge = "select start_id, end_id, rel_name from graph_edge;";
-    rc = sqlite3_prepare_v2(db, sql_edge, -1, &stmt, NULL);
-    if (rc != SQLITE_OK) {
-        printSQLError("Ԥ�����߲�ѯ���ʧ��");
+        printSQLError(db, "预编译顶点查询失败");
         return -1;
     }
 
     while (sqlite3_step(stmt) == SQLITE_ROW) {
-        // ��ȡ������
-        int start_id = sqlite3_column_int(stmt, 0);
-        int end_id = sqlite3_column_int(stmt, 1);
-        char* rel_name = (char*)sqlite3_column_text(stmt, 2);
-        addEdge(g, start_id, end_id, rel_name);
+        int id = sqlite3_column_int(stmt, 0);
+        const char* name = (const char*)sqlite3_column_text(stmt, 1);
+        const char* type = (const char*)sqlite3_column_text(stmt, 2);
+        addVertex(g, id, (char*)name, (char*)type);
     }
     sqlite3_finalize(stmt);
 
-    printf("�ɹ������ݿ������Ѽ��ص�ͼ���У�\n");
+    /* 加载边 */
+    const char* sql_edge = "select start_id, end_id, rel_name from graph_edge;";
+    rc = sqlite3_prepare_v2(db, sql_edge, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        printSQLError(db, "预编译边查询失败");
+        return -1;
+    }
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        int start_id = sqlite3_column_int(stmt, 0);
+        int end_id = sqlite3_column_int(stmt, 1);
+        const char* rel_name = (const char*)sqlite3_column_text(stmt, 2);
+        addEdge(g, start_id, end_id, (char*)rel_name);
+    }
+    sqlite3_finalize(stmt);
+
+    printf("成功：已从数据库加载图数据！\n");
     return 0;
 }
-//������
+
+/* ==================== 主菜单 ==================== */
+void showMenu() {
+    printf("\n======================================\n");
+    printf("          知识图谱系统菜单\n");
+    printf("======================================\n");
+    printf("  %2d. 添加顶点\n", MENU_ADD_VERTEX);
+    printf("  %2d. 添加边\n", MENU_ADD_EDGE);
+    printf("  %2d. 查询顶点\n", MENU_QUERY_VERTEX);
+    printf("  %2d. 修改顶点\n", MENU_MODIFY_VERTEX);
+    printf("  %2d. 修改边\n", MENU_MODIFY_EDGE);
+    printf("  %2d. 删除顶点\n", MENU_DELETE_VERTEX);
+    printf("  %2d. 删除边\n", MENU_DELETE_EDGE);
+    printf("  %2d. 浏览图\n", MENU_TRAVERSE);
+    printf("  %2d. 保存到数据库\n", MENU_SAVE_DB);
+    printf("  %2d. 从数据库加载\n", MENU_LOAD_DB);
+    printf("  %2d. 图统计\n", MENU_STATS);
+    printf("  %2d. 清屏\n", MENU_CLEAR);
+    printf("  %2d. 退出\n", MENU_EXIT);
+    printf("--------------------------------------\n");
+    printf("  请输入功能编号：");
+}
+
+void showQuerySubMenu() {
+    printf("\n  --- 查询子菜单 ---\n");
+    printf("    %d. 按编号查询\n", QUERY_BY_ID);
+    printf("    %d. 按名称查询\n", QUERY_BY_NAME);
+    printf("    %d. 按类型查询\n", QUERY_BY_TYPE);
+    printf("    %d. 查询顶点关联边\n", QUERY_EDGES);
+    printf("    %d. 按名称查询关联边\n", QUERY_EDGES_BY_NAME);
+    printf("  请输入查询方式：");
+}
+
+void freeGraphMemory(Graph* g) {
+    VertexNode* p = g->vertex_head;
+    while (p != NULL) {
+        VertexNode* temp_v = p;
+        EdgeNode* e = p->first_edge;
+        while (e != NULL) {
+            EdgeNode* temp_e = e;
+            e = e->next;
+            free(temp_e);
+        }
+        p = p->next;
+        free(temp_v);
+    }
+}
+
+/* ==================== 程序入口 ==================== */
 int main() {
-    Graph my_graph;              // ����ͼ�ṹ�����
-    initGraph(&my_graph);        // ��ʼ��ͼ���ÿգ�
+    Graph my_graph;
+    initGraph(&my_graph);
     int choice;
-    printf("======= ���ݽṹͼ�׹���ϵͳ =======\n");
+
     while (1) {
-        // ��ӡ���ܲ˵�
-        printf("\n==================== ���ܲ˵� ====================\n");
-        printf("1. ���Ӷ���    2. ���ӱ�      3. ���Ҷ���/��\n");
-        printf("4. �޸Ķ���    5. �޸ı�      6. ɾ������\n");
-        printf("7. ɾ����      8. ����ͼ��    9. ���浽���ݿ�\n");
-        printf("10. �����ݿ����   11. ͼ��ͳ��   0. �˳�����\n");
-        printf("=================================================\n");
-        printf("��ѡ���ܣ�0-12����");
-
-        // ��ȡ�û�ѡ��������
+        showMenu();
         scanf("%d", &choice);
-        getchar(); // ���ջ��з����������fgets��ȡ�����ַ���
+        getchar();
 
-        // ��֧�����������û�ѡ��ִ�ж�Ӧ����
-        switch (choice) {
-        case 1: { //���Ӷ���
+        switch ((MenuChoice)choice) {
+        case MENU_ADD_VERTEX: {
             int id;
             char name[50], type[30];
-            printf("���붥���ţ�"); scanf("%d", &id); getchar();
-            printf("���붥�����ƣ�"); fgets(name, sizeof(name), stdin);
+            printf("请输入顶点编号："); scanf("%d", &id); getchar();
+            printf("请输入顶点名称："); fgets(name, sizeof(name), stdin);
             name[strcspn(name, "\n")] = '\0';
-            printf("���붥�����ͣ�"); fgets(type, sizeof(type), stdin);
+            printf("请输入顶点类型："); fgets(type, sizeof(type), stdin);
             type[strcspn(type, "\n")] = '\0';
-            addVertex(&my_graph, id, name, type); // ���Ӷ���
+            addVertex(&my_graph, id, name, type);
             break;
         }
-        case 2: { //���ӱ�
+        case MENU_ADD_EDGE: {
             int start_id, end_id;
-            char rel[50];
-            printf("������㶥���ţ�"); scanf("%d", &start_id); getchar();
-            printf("�����յ㶥���ţ�"); scanf("%d", &end_id); getchar();
-            printf("�����ϵ���ƣ�"); fgets(rel, sizeof(rel), stdin);
-            rel[strcspn(rel, "\n")] = '\0';
-            addEdge(&my_graph, start_id, end_id, rel); //���ӱ�
+            char rel_name[50];
+            printf("请输入起点编号："); scanf("%d", &start_id); getchar();
+            printf("请输入终点编号："); scanf("%d", &end_id); getchar();
+            printf("请输入关系名称："); fgets(rel_name, sizeof(rel_name), stdin);
+            rel_name[strcspn(rel_name, "\n")] = '\0';
+            addEdge(&my_graph, start_id, end_id, rel_name);
             break;
         }
-        case 3: { //���Ҷ���/��
-            int sub_choice; //�Ӳ˵�ѡ��
-            printf("\n---------------- �����Ӳ˵� ----------------\n");
-            printf("1. ����Ų鶥��  2. �����Ʋ鶥��  3. �����Ͳ鶥��\n");
-            printf("4. ����Ų鶥�������  5. �����Ʋ鶥�������\n");
-            printf("-------------------------------------------\n");
-            printf("ѡ���ӹ��ܣ�"); scanf("%d", &sub_choice); getchar();
-            if (sub_choice == 1) { // ����Ų鶥��
+        case MENU_QUERY_VERTEX: {
+            int sub_choice;
+            showQuerySubMenu();
+            scanf("%d", &sub_choice);
+            getchar();
+
+            switch ((QueryChoice)sub_choice) {
+            case QUERY_BY_ID: {
                 int id;
-                printf("���붥���ţ�"); scanf("%d", &id); getchar();
+                printf("请输入顶点编号："); scanf("%d", &id); getchar();
                 VertexNode* v = findVertexById(&my_graph, id);
-                if (v != NULL) { // �ҵ�����
-                    printf("�ҵ����㣺���=%d | ����=%s | ����=%s\n", v->id, v->name, v->type);
-                }
-                else { // δ�ҵ�
-                    printf("ʧ�ܣ�δ�ҵ����=%d�Ķ���\n", id);
-                }
+                if (v != NULL)
+                    printf("  编号：%d | 名称：%s | 类型：%s\n", v->id, v->name, v->type);
+                else
+                    printf("失败：未找到编号为%d的顶点\n", id);
+                break;
             }
-            else if (sub_choice == 2) { // �����Ʋ鶥��
+            case QUERY_BY_NAME: {
                 char name[50];
-                printf("���붥�����ƹؼ��ʣ�"); fgets(name, sizeof(name), stdin);
+                printf("请输入顶点名称："); fgets(name, sizeof(name), stdin);
                 name[strcspn(name, "\n")] = '\0';
-                findVertexByName(&my_graph, name); //�����Ʋ���
+                findVertexByName(&my_graph, name);
+                break;
             }
-            else if (sub_choice == 3) { //�����Ͳ鶥��
+            case QUERY_BY_TYPE: {
                 char type[30];
-                printf("���붥�����ͣ�"); fgets(type, sizeof(type), stdin);
+                printf("请输入顶点类型："); fgets(type, sizeof(type), stdin);
                 type[strcspn(type, "\n")] = '\0';
-                findVertexByType(&my_graph, type); //�����Ͳ���
+                findVertexByType(&my_graph, type);
+                break;
             }
-            else if (sub_choice == 4) { //�鶥�������
+            case QUERY_EDGES: {
                 int id;
-                printf("���붥���ţ�"); scanf("%d", &id); getchar();
-                findVertexEdges(&my_graph, id); //���ҹ�����
+                printf("请输入顶点编号："); scanf("%d", &id); getchar();
+                findVertexEdges(&my_graph, id);
+                break;
             }
-            else if (sub_choice == 5) { // �����������Ʋ������
+            case QUERY_EDGES_BY_NAME: {
                 char name[50];
-                printf("���붥�����ƹؼ��ʣ�"); fgets(name, sizeof(name), stdin);
+                printf("请输入顶点名称关键字："); fgets(name, sizeof(name), stdin);
                 name[strcspn(name, "\n")] = '\0';
                 findVertexEdgesByName(&my_graph, name);
+                break;
             }
-            else { //��Ч��ѡ��
-                printf("ʧ�ܣ���ѡ��1-4���ӹ��ܣ�\n");
+            default:
+                printf("失败：请选择1-5的查询功能\n");
+                break;
             }
             break;
         }
-        case 4: { // 4. �޸Ķ���
+        case MENU_MODIFY_VERTEX: {
             int id;
             char new_name[50], new_type[30];
-            printf("����Ҫ�޸ĵĶ����ţ�"); scanf("%d", &id); getchar();
-            printf("���������ƣ�"); fgets(new_name, sizeof(new_name), stdin);
+            printf("请输入要修改的顶点编号："); scanf("%d", &id); getchar();
+            printf("请输入新名称："); fgets(new_name, sizeof(new_name), stdin);
             new_name[strcspn(new_name, "\n")] = '\0';
-            printf("���������ͣ�"); fgets(new_type, sizeof(new_type), stdin);
+            printf("请输入新类型："); fgets(new_type, sizeof(new_type), stdin);
             new_type[strcspn(new_type, "\n")] = '\0';
             modifyVertex(&my_graph, id, new_name, new_type);
             break;
         }
-        case 5: { //�޸ı�
+        case MENU_MODIFY_EDGE: {
             int start_id, end_id;
             char new_rel[50];
-            printf("����Ҫ�޸ĵıߣ�����ţ���"); scanf("%d", &start_id); getchar();
-            printf("����Ҫ�޸ĵıߣ��յ��ţ���"); scanf("%d", &end_id); getchar();
-            printf("�����¹�ϵ���ƣ�"); fgets(new_rel, sizeof(new_rel), stdin);
+            printf("请输入要修改的边（起点编号）："); scanf("%d", &start_id); getchar();
+            printf("请输入要修改的边（终点编号）："); scanf("%d", &end_id); getchar();
+            printf("请输入新关系名称："); fgets(new_rel, sizeof(new_rel), stdin);
             new_rel[strcspn(new_rel, "\n")] = '\0';
             modifyEdge(&my_graph, start_id, end_id, new_rel);
             break;
         }
-        case 6: { //ɾ������
+        case MENU_DELETE_VERTEX: {
             int id;
-            printf("����Ҫɾ���Ķ����ţ�"); scanf("%d", &id); getchar();
-            deleteVertex(&my_graph, id); 
+            printf("请输入要删除的顶点编号："); scanf("%d", &id); getchar();
+            deleteVertex(&my_graph, id);
             break;
         }
-        case 7: { // 7. ɾ����
+        case MENU_DELETE_EDGE: {
             int start_id, end_id;
-            printf("����Ҫɾ���ıߣ�����ţ���"); scanf("%d", &start_id); getchar();
-            printf("����Ҫɾ���ıߣ��յ��ţ���"); scanf("%d", &end_id); getchar();
+            printf("请输入要删除的边（起点编号）："); scanf("%d", &start_id); getchar();
+            printf("请输入要删除的边（终点编号）："); scanf("%d", &end_id); getchar();
             deleteEdge(&my_graph, start_id, end_id);
             break;
         }
-        case 8: { //����ͼ��
+        case MENU_TRAVERSE: {
             traverseGraph(&my_graph);
             break;
         }
-        case 9: { //���浽���ݿ�
-            if (initSQLiteDB() == 0) { //�ȳ�ʼ�����ݿ�
-                saveGraphToSQLite(&my_graph); //��������
-                sqlite3_close(db); //�ر����ݿ�����
+        case MENU_SAVE_DB: {
+            sqlite3* db = NULL;
+            if (initSQLiteDB(&db) == 0) {
+                saveGraphToSQLite(db, &my_graph);
+                sqlite3_close(db);
             }
             break;
         }
-        case 10: { //�����ݿ����
-            if (initSQLiteDB() == 0) { //��ʼ�����ݿ�
-                loadGraphFromSQLite(&my_graph); //��������
-                sqlite3_close(db); //�ر����ݿ�����
+        case MENU_LOAD_DB: {
+            sqlite3* db = NULL;
+            if (initSQLiteDB(&db) == 0) {
+                loadGraphFromSQLite(db, &my_graph);
+                sqlite3_close(db);
             }
             break;
         }
-        case 11: { //ͼ��ͳ��
+        case MENU_STATS: {
             printGraphStats(&my_graph);
             break;
         }
-        case 12: { //����
+        case MENU_CLEAR: {
             system("cls");
-
             break;
         }
-        case 0: { // 0. �˳�����
-            printf("�����˳��У������ͷ��ڴ�...\n");
-            // �ͷ����ж���ͱߵ��ڴ�
-            VertexNode* p = my_graph.vertex_head;
-            while (p != NULL) {
-                VertexNode* temp_v = p; //��ʱ���浱ǰ����
-                EdgeNode* e = p->first_edge; //�ͷŵ�ǰ��������б�
-                while (e != NULL) {
-                    EdgeNode* temp_e = e;
-                    e = e->next;
-                    free(temp_e); //�ͷű��ڴ�
-                }
-                p = p->next; //������һ������
-                free(temp_v); //�ͷŶ����ڴ�
-            }
-            printf("�������˳���\n");
+        case MENU_EXIT: {
+            printf("正在退出，释放内存...\n");
+            freeGraphMemory(&my_graph);
+            printf("程序已退出！\n");
             return 0;
         }
         default:
-            printf("ʧ�ܣ���ѡ��0-12�Ĺ��ܣ�\n");
+            printf("失败：请选择0-12的功能\n");
+            break;
         }
     }
 }
